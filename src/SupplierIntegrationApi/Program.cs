@@ -5,7 +5,9 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc.Controllers;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Http.Resilience;
 using Microsoft.IdentityModel.Tokens;
@@ -40,6 +42,20 @@ builder.Services.AddOpenApi(options =>
     });
     options.AddOperationTransformer((operation, context, _) =>
     {
+        if (context.Description.ActionDescriptor is ControllerActionDescriptor action)
+        {
+            (operation.Summary, operation.Description) = (action.ControllerName, action.ActionName) switch
+            {
+                ("Auth", "Login") => ("Authenticate an administrator", "Validates administrator credentials and returns a JWT access token."),
+                ("AdminAuth", "Check") => ("Verify administrator authorization", "Confirms that the supplied JWT grants the Admin role."),
+                ("SupplierSync", "Start") => ("Run a supplier synchronization", "Fetches all supplier product pages, validates them, upserts local products, and records an auditable manual SyncRun."),
+                ("SupplierSync", "Runs") => ("List supplier synchronization runs", "Returns paged synchronization history with optional status and trigger filters."),
+                ("SupplierSync", "Run") => ("Get a supplier synchronization run", "Returns one synchronization audit record by identifier."),
+                ("Products", "List") => ("List synchronized products", "Returns a paged view of local products synchronized from the supplier."),
+                ("Products", "Detail") => ("Get a synchronized product", "Returns one local product by identifier."),
+                _ => (operation.Summary, operation.Description)
+            };
+        }
         var requiresAuthorization = context.Description.ActionDescriptor.EndpointMetadata
             .OfType<IAuthorizeData>()
             .Any();
@@ -92,7 +108,9 @@ builder.Services.AddOpenApi(options =>
     });
 });
 builder.Services.AddProblemDetails();
-builder.Services.AddHealthChecks();
+builder.Services.AddHealthChecks()
+    .AddCheck("self", () => HealthCheckResult.Healthy(), tags: ["live", "ready"])
+    .AddCheck<DatabaseHealthCheck>("database", tags: ["ready"]);
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 builder.Services.AddOptions<SupplierOptions>()
@@ -105,6 +123,8 @@ builder.Services.AddOptions<SupplierOptions>()
         "Supplier request timeout must be between 0.05 and 120 seconds.")
     .Validate(options => Encoding.UTF8.GetByteCount(options.WebhookSecret) >= 32,
         "Supplier webhook secret must be at least 32 UTF-8 bytes.")
+    .Validate(options => options.ScheduledSyncIntervalMinutes is >= 1 and <= 1440,
+        "Supplier scheduled sync interval must be between 1 and 1440 minutes.")
     .ValidateOnStart();
 builder.Services.Configure<AdminSeedOptions>(
     builder.Configuration.GetSection(AdminSeedOptions.SectionName));
@@ -148,6 +168,7 @@ builder.Services.AddScoped<IPasswordHasher<User>, PasswordHasher<User>>();
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<ISupplierSyncService, SupplierSyncService>();
+builder.Services.AddHostedService<SupplierSyncBackgroundService>();
 builder.Services.AddSingleton<IWebhookSignatureVerifier, WebhookSignatureVerifier>();
 builder.Services.AddScoped<ISupplierWebhookService, SupplierWebhookService>();
 builder.Services.AddHttpClient<ISupplierClient, SupplierClient>((services, client) =>
@@ -208,7 +229,14 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
-app.MapHealthChecks("/health");
+app.MapHealthChecks("/health", new HealthCheckOptions
+{
+    Predicate = registration => registration.Tags.Contains("live")
+}).AllowAnonymous();
+app.MapHealthChecks("/health/ready", new HealthCheckOptions
+{
+    Predicate = registration => registration.Tags.Contains("ready")
+}).AllowAnonymous();
 
 await DevelopmentAdminSeeder.SeedAsync(app);
 

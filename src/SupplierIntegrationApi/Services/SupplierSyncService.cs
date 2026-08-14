@@ -22,11 +22,18 @@ public sealed class SupplierSyncService(
     private const int MaxSupplierPages = 10_000;
     private const int MaxSupplierProducts = 1_000_000;
 
-    public async Task<SyncRunResponse> RunManualAsync(CancellationToken cancellationToken)
+    public Task<SyncRunResponse> RunManualAsync(CancellationToken cancellationToken) =>
+        RunAsync(SyncTriggerType.Manual, cancellationToken);
+
+    public Task<SyncRunResponse> RunScheduledAsync(CancellationToken cancellationToken) =>
+        RunAsync(SyncTriggerType.Scheduled, cancellationToken);
+
+    private async Task<SyncRunResponse> RunAsync(
+        SyncTriggerType triggerType, CancellationToken cancellationToken)
     {
         var run = new SyncRun
         {
-            TriggerType = SyncTriggerType.Manual,
+            TriggerType = triggerType,
             Status = SyncRunStatus.Running,
             StartedAtUtc = timeProvider.GetUtcNow().UtcDateTime
         };
@@ -42,7 +49,7 @@ public sealed class SupplierSyncService(
             throw new SyncAlreadyRunningException();
         }
 
-        logger.LogInformation("Supplier sync {SyncRunId} started", run.Id);
+        logger.LogInformation("Supplier sync {SyncRunId} started with trigger {TriggerType}", run.Id, triggerType);
         try
         {
             var products = await ReadAllProductsAsync(run, cancellationToken);
@@ -68,7 +75,8 @@ public sealed class SupplierSyncService(
         catch (Exception exception)
         {
             await FinalizeFailureAsync(run, SyncRunStatus.Failed, "sync_failed", "The synchronization could not be completed.");
-            logger.LogError(exception, "Supplier sync {SyncRunId} failed", run.Id);
+            logger.LogError("Supplier sync {SyncRunId} failed with unexpected category {FailureCategory}",
+                run.Id, exception.GetType().Name);
             throw;
         }
     }
@@ -160,7 +168,11 @@ public sealed class SupplierSyncService(
             persistedRun.FailureMessage = message;
             await finalizationContext.SaveChangesAsync(CancellationToken.None);
         }
-        catch (Exception exception) { logger.LogError(exception, "Could not finalize supplier sync {SyncRunId}", run.Id); }
+        catch (Exception exception)
+        {
+            logger.LogError("Could not finalize supplier sync {SyncRunId}; failure category {FailureCategory}",
+                run.Id, exception.GetType().Name);
+        }
     }
 
     private static bool IsSingleRunningViolation(DbUpdateException exception)

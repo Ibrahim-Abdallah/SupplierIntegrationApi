@@ -9,5 +9,6 @@ public class SupplierOptions
     public int PageSize { get; set; } = 100;
     public double RequestTimeoutSeconds { get; set; } = 10;
     public string WebhookSecret { get; set; } = string.Empty;
+    public bool ScheduledSyncEnabled { get; set; }
     public int ScheduledSyncIntervalMinutes { get; set; } = 30;
 }
