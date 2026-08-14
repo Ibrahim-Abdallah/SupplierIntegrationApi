@@ -21,7 +21,12 @@ public sealed class SupplierSyncController(ISupplierSyncService syncService, App
         catch (SyncAlreadyRunningException exception) { return Problem(title: exception.Message, statusCode: 409); }
         catch (SupplierException exception)
         {
-            var status = exception.Code == "supplier_timeout" ? 504 : 502;
+            var status = exception.Code switch
+            {
+                "supplier_timeout" => StatusCodes.Status504GatewayTimeout,
+                "supplier_rate_limited" or "supplier_unavailable" => StatusCodes.Status503ServiceUnavailable,
+                _ => StatusCodes.Status502BadGateway
+            };
             return Problem(title: "Supplier synchronization failed", detail: exception.SafeMessage, statusCode: status);
         }
     }
