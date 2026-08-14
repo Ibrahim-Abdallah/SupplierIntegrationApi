@@ -9,6 +9,8 @@ using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Http.Resilience;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
+using Polly;
+using Polly.Timeout;
 using Scalar.AspNetCore;
 using SupplierIntegrationApi.Configuration;
 using SupplierIntegrationApi.Data;
@@ -120,9 +122,27 @@ builder.Services.AddHttpClient<ISupplierClient, SupplierClient>((services, clien
     .Configure((options, services) =>
     {
         var supplier = services.GetRequiredService<IOptions<SupplierOptions>>().Value;
+        var resilienceLogger = services.GetRequiredService<ILogger<SupplierClient>>();
         var attemptTimeout = TimeSpan.FromSeconds(supplier.RequestTimeoutSeconds);
         options.Retry.MaxRetryAttempts = 3;
         options.Retry.Delay = TimeSpan.FromMilliseconds(200);
+        options.Retry.BackoffType = DelayBackoffType.Constant;
+        options.Retry.UseJitter = false;
+        options.Retry.ShouldRetryAfterHeader = true;
+        options.Retry.OnRetry = arguments =>
+        {
+            var statusCode = arguments.Outcome.Result?.StatusCode;
+            var failureCategory = statusCode is not null
+                ? $"http_{(int)statusCode.Value}"
+                : arguments.Outcome.Exception is TimeoutRejectedException
+                    ? "timeout"
+                    : "network";
+            resilienceLogger.LogWarning(
+                "Retrying supplier request after {FailureCategory}; retry {RetryAttempt} of {MaxRetryAttempts} in {RetryDelayMs} ms",
+                failureCategory, arguments.AttemptNumber + 1, options.Retry.MaxRetryAttempts,
+                arguments.RetryDelay.TotalMilliseconds);
+            return default;
+        };
         options.AttemptTimeout.Timeout = attemptTimeout;
         options.TotalRequestTimeout.Timeout = (attemptTimeout * 4) + TimeSpan.FromSeconds(2);
     });

@@ -34,10 +34,18 @@ public sealed class SupplierClient(HttpClient httpClient, ILogger<SupplierClient
         {
             if (!response.IsSuccessStatusCode)
             {
-                var code = response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
-                    ? "supplier_unauthorized"
-                    : "supplier_unavailable";
-                throw new SupplierException(code, "The supplier rejected or could not complete the request.");
+                throw response.StatusCode switch
+                {
+                    HttpStatusCode.RequestTimeout =>
+                        new SupplierException("supplier_timeout", "The supplier request timed out."),
+                    HttpStatusCode.TooManyRequests =>
+                        new SupplierException("supplier_rate_limited", "The supplier rate limit was exceeded."),
+                    HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden =>
+                        new SupplierException("supplier_unauthorized", "The supplier rejected its configured credentials."),
+                    >= HttpStatusCode.InternalServerError =>
+                        new SupplierException("supplier_unavailable", "The supplier is unavailable."),
+                    _ => new SupplierException("supplier_rejected", "The supplier rejected the request.")
+                };
             }
 
             try

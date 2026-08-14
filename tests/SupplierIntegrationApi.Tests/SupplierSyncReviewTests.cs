@@ -65,6 +65,7 @@ public sealed class SupplierSyncReviewTests
         Assert.Equal(SyncRunStatus.Cancelled, run.Status);
         Assert.Equal("cancelled", run.FailureCode);
         Assert.Empty(await db.Products.ToListAsync());
+        Assert.Equal(1, handler.CallCount);
     }
 
     [Fact]
