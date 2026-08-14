@@ -1,3 +1,8 @@
 <Solution>
-  <Project Path="SupplierIntegrationApi/SupplierIntegrationApi.csproj" />
+  <Folder Name="/src/">
+    <Project Path="src/SupplierIntegrationApi/SupplierIntegrationApi.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SupplierIntegrationApi.Tests/SupplierIntegrationApi.Tests.csproj" />
+  </Folder>
 </Solution>
