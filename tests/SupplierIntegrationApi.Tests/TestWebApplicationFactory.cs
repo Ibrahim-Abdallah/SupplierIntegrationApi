@@ -22,6 +22,12 @@ public sealed class TestWebApplicationFactory : WebApplicationFactory<Program>
     public const string JwtKey = "test-only-signing-key-with-at-least-32-bytes";
 
     private readonly SqliteConnection connection = new("Data Source=:memory:");
+    private readonly HttpMessageHandler? supplierHandler;
+
+    public TestWebApplicationFactory(HttpMessageHandler? supplierHandler = null)
+    {
+        this.supplierHandler = supplierHandler;
+    }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -35,7 +41,11 @@ public sealed class TestWebApplicationFactory : WebApplicationFactory<Program>
                 ["Jwt:Issuer"] = JwtIssuer,
                 ["Jwt:Audience"] = JwtAudience,
                 ["Jwt:Key"] = JwtKey,
-                ["Jwt:AccessTokenLifetimeMinutes"] = "15"
+                ["Jwt:AccessTokenLifetimeMinutes"] = "15",
+                ["Supplier:BaseUrl"] = "https://supplier.test/",
+                ["Supplier:ApiKey"] = "test-only-api-key",
+                ["Supplier:PageSize"] = "2",
+                ["Supplier:RequestTimeoutSeconds"] = "0.05"
             });
         });
         builder.ConfigureServices(services =>
@@ -45,6 +55,11 @@ public sealed class TestWebApplicationFactory : WebApplicationFactory<Program>
             services.RemoveAll<DbContextOptions<AppDbContext>>();
             services.RemoveAll<IDbContextOptionsConfiguration<AppDbContext>>();
             services.AddDbContext<AppDbContext>(options => options.UseSqlite(connection));
+            if (supplierHandler is not null)
+            {
+                services.AddHttpClient<ISupplierClient, SupplierIntegrationApi.Services.SupplierClient>()
+                    .ConfigurePrimaryHttpMessageHandler(() => supplierHandler);
+            }
 
             using var scope = services.BuildServiceProvider().CreateScope();
             scope.ServiceProvider.GetRequiredService<AppDbContext>().Database.EnsureCreated();

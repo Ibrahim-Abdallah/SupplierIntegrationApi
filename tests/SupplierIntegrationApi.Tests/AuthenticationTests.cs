@@ -133,10 +133,16 @@ public class AuthenticationTests
         var schemes = document.GetProperty("components").GetProperty("securitySchemes");
         var login = document.GetProperty("paths").GetProperty("/api/auth/login").GetProperty("post");
         var admin = document.GetProperty("paths").GetProperty("/api/admin/auth-check").GetProperty("get");
+        var sync = document.GetProperty("paths").GetProperty("/api/admin/integrations/supplier/sync").GetProperty("post");
+        var runs = document.GetProperty("paths").GetProperty("/api/admin/integrations/supplier/runs").GetProperty("get");
+        var products = document.GetProperty("paths").GetProperty("/api/products").GetProperty("get");
 
         Assert.True(schemes.TryGetProperty("Bearer", out _));
         Assert.False(login.TryGetProperty("security", out _));
         Assert.True(admin.GetProperty("security").GetArrayLength() > 0);
+        Assert.True(sync.GetProperty("security").GetArrayLength() > 0);
+        Assert.True(runs.GetProperty("security").GetArrayLength() > 0);
+        Assert.True(products.GetProperty("security").GetArrayLength() > 0);
     }
 
     private static HttpClient CreateClient(TestWebApplicationFactory factory) =>

@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Http.Resilience;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
 using Scalar.AspNetCore;
@@ -57,8 +58,15 @@ builder.Services.AddProblemDetails();
 builder.Services.AddHealthChecks();
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
-builder.Services.Configure<SupplierOptions>(
-    builder.Configuration.GetSection(SupplierOptions.SectionName));
+builder.Services.AddOptions<SupplierOptions>()
+    .Bind(builder.Configuration.GetSection(SupplierOptions.SectionName))
+    .Validate(options => options.BaseUrl.IsAbsoluteUri && options.BaseUrl.Scheme is "http" or "https",
+        "Supplier BaseUrl must be an absolute HTTP or HTTPS URL.")
+    .Validate(options => !string.IsNullOrWhiteSpace(options.ApiKey), "Supplier API key is required.")
+    .Validate(options => options.PageSize is >= 1 and <= 1000, "Supplier page size must be between 1 and 1000.")
+    .Validate(options => options.RequestTimeoutSeconds is >= 0.05 and <= 120,
+        "Supplier request timeout must be between 0.05 and 120 seconds.")
+    .ValidateOnStart();
 builder.Services.Configure<AdminSeedOptions>(
     builder.Configuration.GetSection(AdminSeedOptions.SectionName));
 builder.Services.AddOptions<JwtOptions>()
@@ -100,6 +108,24 @@ builder.Services.AddSingleton<IEmailNormalizer, EmailNormalizer>();
 builder.Services.AddScoped<IPasswordHasher<User>, PasswordHasher<User>>();
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<ISupplierSyncService, SupplierSyncService>();
+builder.Services.AddHttpClient<ISupplierClient, SupplierClient>((services, client) =>
+    {
+        var supplier = services.GetRequiredService<IOptions<SupplierOptions>>().Value;
+        client.BaseAddress = supplier.BaseUrl;
+        client.DefaultRequestHeaders.Add("X-Api-Key", supplier.ApiKey);
+        client.Timeout = Timeout.InfiniteTimeSpan;
+    })
+    .AddStandardResilienceHandler()
+    .Configure((options, services) =>
+    {
+        var supplier = services.GetRequiredService<IOptions<SupplierOptions>>().Value;
+        var attemptTimeout = TimeSpan.FromSeconds(supplier.RequestTimeoutSeconds);
+        options.Retry.MaxRetryAttempts = 3;
+        options.Retry.Delay = TimeSpan.FromMilliseconds(200);
+        options.AttemptTimeout.Timeout = attemptTimeout;
+        options.TotalRequestTimeout.Timeout = (attemptTimeout * 4) + TimeSpan.FromSeconds(2);
+    });
 builder.Services.AddValidatorsFromAssemblyContaining<LoginRequestValidator>();
 
 var app = builder.Build();
