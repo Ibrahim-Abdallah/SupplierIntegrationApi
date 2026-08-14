@@ -143,6 +143,11 @@ public class AuthenticationTests
         Assert.True(sync.GetProperty("security").GetArrayLength() > 0);
         Assert.True(runs.GetProperty("security").GetArrayLength() > 0);
         Assert.True(products.GetProperty("security").GetArrayLength() > 0);
+        Assert.False(string.IsNullOrWhiteSpace(login.GetProperty("summary").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(admin.GetProperty("description").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(sync.GetProperty("summary").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(runs.GetProperty("description").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(products.GetProperty("summary").GetString()));
     }
 
     private static HttpClient CreateClient(TestWebApplicationFactory factory) =>

@@ -26,11 +26,16 @@ public sealed class TestWebApplicationFactory : WebApplicationFactory<Program>
     private readonly string databasePath = Path.Combine(Path.GetTempPath(), $"supplier-webhooks-{Guid.NewGuid():N}.db");
     private readonly HttpMessageHandler? supplierHandler;
     private readonly bool failWebhookClaim;
+    private readonly bool scheduledSyncEnabled;
 
-    public TestWebApplicationFactory(HttpMessageHandler? supplierHandler = null, bool failWebhookClaim = false)
+    public TestWebApplicationFactory(
+        HttpMessageHandler? supplierHandler = null,
+        bool failWebhookClaim = false,
+        bool scheduledSyncEnabled = false)
     {
         this.supplierHandler = supplierHandler;
         this.failWebhookClaim = failWebhookClaim;
+        this.scheduledSyncEnabled = scheduledSyncEnabled;
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -49,7 +54,9 @@ public sealed class TestWebApplicationFactory : WebApplicationFactory<Program>
                 ["Supplier:ApiKey"] = "test-only-api-key",
                 ["Supplier:PageSize"] = "2",
                 ["Supplier:RequestTimeoutSeconds"] = "0.05",
-                ["Supplier:WebhookSecret"] = WebhookSecret
+                ["Supplier:WebhookSecret"] = WebhookSecret,
+                ["Supplier:ScheduledSyncEnabled"] = scheduledSyncEnabled.ToString(),
+                ["Supplier:ScheduledSyncIntervalMinutes"] = "30"
             });
         });
         builder.ConfigureServices(services =>
