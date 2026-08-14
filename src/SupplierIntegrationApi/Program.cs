@@ -4,6 +4,7 @@ using FluentValidation;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Http.Resilience;
@@ -53,6 +54,40 @@ builder.Services.AddOpenApi(options =>
                 [new OpenApiSecuritySchemeReference("Bearer", context.Document)] = []
             });
         }
+        if (context.Description.ActionDescriptor is ControllerActionDescriptor
+            { ControllerName: "SupplierWebhooks", ActionName: "Receive" })
+        {
+            operation.Summary = "Receive a signed supplier webhook";
+            operation.Description = "The signature is HMAC-SHA256 over the exact raw request body bytes.";
+            operation.RequestBody = new OpenApiRequestBody
+            {
+                Required = true,
+                Content = new Dictionary<string, OpenApiMediaType>
+                {
+                    ["application/json"] = new()
+                    {
+                        Schema = new OpenApiSchema
+                        {
+                            Type = JsonSchemaType.Object,
+                            Properties = new Dictionary<string, IOpenApiSchema>
+                            {
+                                ["eventType"] = new OpenApiSchema { Type = JsonSchemaType.String },
+                                ["productId"] = new OpenApiSchema { Type = JsonSchemaType.String },
+                                ["stockQuantity"] = new OpenApiSchema { Type = JsonSchemaType.Integer },
+                                ["price"] = new OpenApiSchema { Type = JsonSchemaType.Number },
+                                ["name"] = new OpenApiSchema { Type = JsonSchemaType.String },
+                                ["isActive"] = new OpenApiSchema { Type = JsonSchemaType.Boolean }
+                            }
+                        }
+                    }
+                }
+            };
+            foreach (var parameter in operation.Parameters?.OfType<OpenApiParameter>() ?? [])
+            {
+                if (parameter.Name is "X-Supplier-Event-Id" or "X-Supplier-Signature")
+                    parameter.Required = true;
+            }
+        }
         return Task.CompletedTask;
     });
 });
@@ -68,6 +103,8 @@ builder.Services.AddOptions<SupplierOptions>()
     .Validate(options => options.PageSize is >= 1 and <= 1000, "Supplier page size must be between 1 and 1000.")
     .Validate(options => options.RequestTimeoutSeconds is >= 0.05 and <= 120,
         "Supplier request timeout must be between 0.05 and 120 seconds.")
+    .Validate(options => Encoding.UTF8.GetByteCount(options.WebhookSecret) >= 32,
+        "Supplier webhook secret must be at least 32 UTF-8 bytes.")
     .ValidateOnStart();
 builder.Services.Configure<AdminSeedOptions>(
     builder.Configuration.GetSection(AdminSeedOptions.SectionName));
@@ -111,6 +148,8 @@ builder.Services.AddScoped<IPasswordHasher<User>, PasswordHasher<User>>();
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<ISupplierSyncService, SupplierSyncService>();
+builder.Services.AddSingleton<IWebhookSignatureVerifier, WebhookSignatureVerifier>();
+builder.Services.AddScoped<ISupplierWebhookService, SupplierWebhookService>();
 builder.Services.AddHttpClient<ISupplierClient, SupplierClient>((services, client) =>
     {
         var supplier = services.GetRequiredService<IOptions<SupplierOptions>>().Value;
