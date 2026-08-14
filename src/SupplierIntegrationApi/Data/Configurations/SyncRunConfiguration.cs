@@ -12,5 +12,9 @@ public class SyncRunConfiguration : IEntityTypeConfiguration<SyncRun>
         builder.HasKey(run => run.Id);
         builder.Property(run => run.FailureCode).HasMaxLength(64);
         builder.Property(run => run.FailureMessage).HasMaxLength(1024);
+        builder.HasIndex(run => run.Status)
+            .IsUnique()
+            .HasFilter("[Status] = 1")
+            .HasDatabaseName("UX_SyncRuns_OneRunning");
     }
 }
