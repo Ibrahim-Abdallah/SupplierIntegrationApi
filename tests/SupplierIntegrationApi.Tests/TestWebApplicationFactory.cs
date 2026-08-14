@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -20,18 +21,20 @@ public sealed class TestWebApplicationFactory : WebApplicationFactory<Program>
     public const string JwtIssuer = "SupplierIntegrationApi.Tests";
     public const string JwtAudience = "SupplierIntegrationApi.Tests.Client";
     public const string JwtKey = "test-only-signing-key-with-at-least-32-bytes";
+    public const string WebhookSecret = "test-only-webhook-secret-at-least-32-bytes";
 
-    private readonly SqliteConnection connection = new("Data Source=:memory:");
+    private readonly string databasePath = Path.Combine(Path.GetTempPath(), $"supplier-webhooks-{Guid.NewGuid():N}.db");
     private readonly HttpMessageHandler? supplierHandler;
+    private readonly bool failWebhookClaim;
 
-    public TestWebApplicationFactory(HttpMessageHandler? supplierHandler = null)
+    public TestWebApplicationFactory(HttpMessageHandler? supplierHandler = null, bool failWebhookClaim = false)
     {
         this.supplierHandler = supplierHandler;
+        this.failWebhookClaim = failWebhookClaim;
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
-        connection.Open();
         builder.UseEnvironment("Testing");
         builder.ConfigureLogging(logging => logging.ClearProviders());
         builder.ConfigureAppConfiguration((_, configuration) =>
@@ -45,7 +48,8 @@ public sealed class TestWebApplicationFactory : WebApplicationFactory<Program>
                 ["Supplier:BaseUrl"] = "https://supplier.test/",
                 ["Supplier:ApiKey"] = "test-only-api-key",
                 ["Supplier:PageSize"] = "2",
-                ["Supplier:RequestTimeoutSeconds"] = "0.05"
+                ["Supplier:RequestTimeoutSeconds"] = "0.05",
+                ["Supplier:WebhookSecret"] = WebhookSecret
             });
         });
         builder.ConfigureServices(services =>
@@ -54,7 +58,14 @@ public sealed class TestWebApplicationFactory : WebApplicationFactory<Program>
             services.RemoveAll<DbContextOptions>();
             services.RemoveAll<DbContextOptions<AppDbContext>>();
             services.RemoveAll<IDbContextOptionsConfiguration<AppDbContext>>();
-            services.AddDbContext<AppDbContext>(options => options.UseSqlite(connection));
+            services.AddSingleton<ProductUpdateCountingInterceptor>();
+            if (failWebhookClaim) services.AddSingleton<WebhookClaimFailureInterceptor>();
+            services.AddDbContext<AppDbContext>((provider, options) => options
+                .UseSqlite($"Data Source={databasePath};Cache=Shared;Default Timeout=30;Pooling=False")
+                .AddInterceptors(failWebhookClaim
+                    ? [provider.GetRequiredService<ProductUpdateCountingInterceptor>(),
+                        provider.GetRequiredService<WebhookClaimFailureInterceptor>()]
+                    : [provider.GetRequiredService<ProductUpdateCountingInterceptor>()]));
             if (supplierHandler is not null)
             {
                 services.AddHttpClient<ISupplierClient, SupplierIntegrationApi.Services.SupplierClient>()
@@ -62,7 +73,10 @@ public sealed class TestWebApplicationFactory : WebApplicationFactory<Program>
             }
 
             using var scope = services.BuildServiceProvider().CreateScope();
-            scope.ServiceProvider.GetRequiredService<AppDbContext>().Database.EnsureCreated();
+            var database = scope.ServiceProvider.GetRequiredService<AppDbContext>().Database;
+            database.EnsureCreated();
+            database.ExecuteSqlRaw("PRAGMA journal_mode=WAL;");
+            database.ExecuteSqlRaw("PRAGMA busy_timeout=30000;");
         });
     }
 
@@ -92,9 +106,43 @@ public sealed class TestWebApplicationFactory : WebApplicationFactory<Program>
     protected override void Dispose(bool disposing)
     {
         base.Dispose(disposing);
-        if (disposing)
+        if (disposing && File.Exists(databasePath)) File.Delete(databasePath);
+    }
+}
+
+public sealed class ProductUpdateCountingInterceptor : SaveChangesInterceptor
+{
+    private int productUpdates;
+    public int ProductUpdates => Volatile.Read(ref productUpdates);
+
+    public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+        DbContextEventData eventData,
+        InterceptionResult<int> result,
+        CancellationToken cancellationToken = default)
+    {
+        if (eventData.Context is not null)
         {
-            connection.Dispose();
+            var count = eventData.Context.ChangeTracker.Entries<Product>()
+                .Count(entry => entry.State == EntityState.Modified);
+            Interlocked.Add(ref productUpdates, count);
         }
+        return base.SavingChangesAsync(eventData, result, cancellationToken);
+    }
+}
+
+public sealed class WebhookClaimFailureInterceptor : SaveChangesInterceptor
+{
+    public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+        DbContextEventData eventData,
+        InterceptionResult<int> result,
+        CancellationToken cancellationToken = default)
+    {
+        if (eventData.Context?.ChangeTracker.Entries<WebhookEvent>()
+            .Any(entry => entry.State == EntityState.Added) == true)
+        {
+            throw new DbUpdateException("test-provider-detail-sentinel");
+        }
+
+        return base.SavingChangesAsync(eventData, result, cancellationToken);
     }
 }
